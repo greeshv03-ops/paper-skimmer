@@ -36,8 +36,8 @@ export async function POST(req: NextRequest) {
       await parser.destroy();
     }
 
-    // Llama 3.3 70B has a 128k token context window (~500k chars is safe)
-    const truncatedText = textContent.slice(0, 400000);
+    // Groq free tier is capped at 12k tokens/min — keep input well under that
+    const truncatedText = textContent.slice(0, 30000);
 
     const completion = await client.chat.completions.create({
       model: "llama-3.3-70b-versatile",
