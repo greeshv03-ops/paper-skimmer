@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFParse } from "pdf-parse";
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import Groq from "groq-sdk";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY as string);
+const client = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
 
 const MAX_FILE_SIZE_MB = 20;
 
@@ -34,50 +36,49 @@ export async function POST(req: NextRequest) {
       await parser.destroy();
     }
 
-    const truncatedText = textContent.slice(0, 500000);
+    // Llama 3.3 70B has a 128k token context window (~500k chars is safe)
+    const truncatedText = textContent.slice(0, 400000);
 
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: SchemaType.OBJECT,
-          properties: {
-            summary: {
-              type: SchemaType.ARRAY,
-              items: { type: SchemaType.STRING },
-              description: "Exactly 3 bullet points summarizing the core findings of the paper.",
-            },
-            methods: {
-              type: SchemaType.STRING,
-              description: "A concise paragraph explaining the key methodology, setup, and datasets used.",
-            },
-            equations: {
-              type: SchemaType.ARRAY,
-              items: { type: SchemaType.STRING },
-              description: "A list of the key equations, mathematical models, or primary metrics evaluated.",
-            },
-          },
-          required: ["summary", "methods", "equations"],
+    const completion = await client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `You are an expert academic research assistant. Analyze the research paper and respond with a JSON object only, with exactly this structure:
+{
+  "summary": ["bullet point 1", "bullet point 2", "bullet point 3"],
+  "methods": "one paragraph describing the methodology, experimental setup, and datasets used",
+  "equations": ["equation or metric 1", "equation or metric 2"]
+}
+
+Rules:
+- summary: exactly 3 concise bullet points on the core findings
+- methods: one paragraph, factual and specific
+- equations: key equations, mathematical models, or primary evaluation metrics (empty array [] if none)`,
         },
-      },
+        {
+          role: "user",
+          content: `Research paper text:\n\n${truncatedText}`,
+        },
+      ],
     });
 
-    const prompt = `You are an expert academic research assistant. Read the provided research paper text and extract the required information.\n\nPaper Text:\n${truncatedText}`;
-
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+    const responseText = completion.choices[0]?.message?.content;
 
     if (!responseText) {
-      throw new Error("No response from Gemini");
+      throw new Error("No response from Groq");
     }
 
     const parsedData = JSON.parse(responseText);
 
     return NextResponse.json({ data: parsedData });
   } catch (error: any) {
-    console.error("Error analyzing PDF with Gemini:", error);
-    return NextResponse.json({ error: error.message || "Failed to process PDF" }, { status: 500 });
+    console.error("Error analyzing PDF with Groq:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to process PDF" },
+      { status: 500 }
+    );
   }
 }
